@@ -38,7 +38,13 @@ class LayerNorm(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        mean = inputs.mean( -1, keepdim=True)
+        var = inputs.var(-1, keepdim=True, unbiased=False)
+        outputs = (inputs - mean) / torch.sqrt(var + self.eps)
+        outputs = outputs * self.weight.unsqueeze(0).unsqueeze(0) + self.bias.unsqueeze(0).unsqueeze(0)
+        return outputs
+    
+        
 
     def reset_parameters(self):
         nn.init.ones_(self.weight)
@@ -55,6 +61,10 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
+        self.query = nn.Linear(head_size * num_heads, head_size * num_heads)
+        self.key = nn.Linear(head_size * num_heads, head_size * num_heads)
+        self.value = nn.Linear(head_size * num_heads, head_size * num_heads)
+        self.proj = nn.Linear(head_size * num_heads, head_size * num_heads)
 
     def get_attention_weights(self, queries, keys, mask=None):
         """Compute the attention weights.
@@ -91,7 +101,11 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        attn_weights = queries @ keys.transpose(-2, -1) / math.sqrt(self.head_size)
+        if mask is not None:
+            attn_weights = attn_weights.masked_fill(mask.bool().unsqueeze(1).unsqueeze(2)==0, float('-inf'))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        return attn_weights
         
     def apply_attention(self, queries, keys, values, mask=None):
         """Apply the attention.
@@ -138,7 +152,9 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        attn_weights = self.get_attention_weights(queries, keys, mask)
+        attended_values = attn_weights @ values
+        return self.merge_heads(attended_values)
 
     def split_heads(self, tensor):
         """Split the head vectors.
@@ -167,7 +183,9 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        batch_size, sequence_length, _ = tensor.size()
+        dim = self.head_size
+        return tensor.view(batch_size, sequence_length, self.num_heads, dim).permute(0, 2, 1, 3)
         
     def merge_heads(self, tensor):
         """Merge the head vectors.
@@ -195,7 +213,9 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        batch_size, num_heads, sequence_length, dim = tensor.size()
+        output = tensor.transpose(1, 2).contiguous().view(batch_size, sequence_length, num_heads * dim)
+        return output
 
     def forward(self, hidden_states, mask=None):
         """Multi-headed attention.
@@ -235,7 +255,24 @@ class MultiHeadedAttention(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        #hidden_states = hidden_states[0]
+
+        #B, T, C = hidden_states.size()
+
+        Q = self.query(hidden_states) # (B, T, head_size * num_heads)
+        Q = self.split_heads(Q) # (B, num_heads, T, head_size)
+
+        K = self.key(hidden_states) # (B, T, head_size * num_heads)
+        K = self.split_heads(K) # (B, num_heads, T, head_size)
+
+        V = self.value(hidden_states) # (B, T, head_size * num_heads)
+        V = self.split_heads(V) # (B, num_heads, T, head_size)
+
+        Y = self.apply_attention(Q, K, V, mask) # (B, T, head_size * num_heads)
+        
+        outputs = self.proj(Y) # (B, T, head_size * num_heads)
+        return outputs
+
 
 class PostNormAttentionBlock(nn.Module):
     
@@ -307,7 +344,16 @@ class PreNormAttentionBlock(nn.Module):
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        norm1 = self.layer_norm_1(x)
+        attention_outputs = self.attn(norm1, mask)
+
+        x = x + attention_outputs
+
+        norm2 = self.layer_norm_2(x)
+        fc_output = self.linear(norm2)
+
+        x = x + fc_output
+        return x
 
 
 class Transformer(nn.Module):
@@ -363,22 +409,27 @@ class Transformer(nn.Module):
             A tensor containing the output from the mlp_head.
         """
         # Preprocess input
-        
-        x = self.embedding(x)
+        x = self.embedding(x) # (B, T) -> (B, T, C)
         B, T, _ = x.shape
 
         # Add CLS token and positional encoding
-        cls_token = self.cls_token.repeat(B, 1, 1)
+        cls_token = self.cls_token.repeat(B, 1, 1) # (B, 1, C)
         x = torch.cat([cls_token, x], dim=1)
         x = x + self.pos_embedding[:,:T+1]
         #Add dropout and then the transformer (remember to update the mask because of the CLS token)
+        x = self.dropout(x)
+        if mask is not None:
+            mask = mask[:,1:]
+        for layer in self.transformer:
+            x = layer(x, mask)
+        
         # ==========================
         # TODO: Write your code here
         # ==========================
         
         #Take the cls token representation and send it to mlp_head
- 
         # ==========================
         # TODO: Write your code here
         # ==========================
-        pass
+        output = self.mlp_head(x[:,0])
+        return output

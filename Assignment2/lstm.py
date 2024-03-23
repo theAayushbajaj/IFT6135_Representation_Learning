@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class LSTM(nn.Module):
     def __init__(
         self,
@@ -64,25 +63,31 @@ class LSTM(nn.Module):
         # # ==========================
         # # TODO: Write your code here
         # # ==========================
-        i = torch.sigmoid(torch.matmul(inputs, self.w_ii.t()) + self.b_ii + torch.matmul(hidden_states[0], self.w_hi.t()) + self.b_hi)
-        f = torch.sigmoid(torch.matmul(inputs, self.w_if.t()) + self.b_if + torch.matmul(hidden_states[0], self.w_hf.t()) + self.b_hf)
-        g = torch.tanh(torch.matmul(inputs, self.w_ig.t()) + self.b_ig + torch.matmul(hidden_states[0], self.w_hg.t()) + self.b_hg)
-        o = torch.sigmoid(torch.matmul(inputs, self.w_io.t()) + self.b_io + torch.matmul(hidden_states[0], self.w_ho.t()) + self.b_ho)
-        c = f * hidden_states[1] + i * g
-        h = o * torch.tanh(c)
-        return h, (h, c)
+        h_previous, c_previous = hidden_states
+        batch_size, sequence_length, _ = inputs.size()
+        outputs = []
 
+        for t in range(sequence_length):
+            input_t = inputs[:, t, :]  # (batch_size, input_size)
+
+            i = torch.sigmoid(input_t @ self.w_ii.T + self.b_ii + h_previous.squeeze(0) @ self.w_hi.T + self.b_hi)
+            f = torch.sigmoid(input_t @ self.w_if.T + self.b_if + h_previous.squeeze(0) @ self.w_hf.T + self.b_hf)
+            g = torch.tanh(input_t @ self.w_ig.T + self.b_ig + h_previous.squeeze(0) @ self.w_hg.T + self.b_hg)
+            o = torch.sigmoid(input_t @ self.w_io.T + self.b_io + h_previous.squeeze(0) @ self.w_ho.T + self.b_ho)
+
+            c_current = f * c_previous.squeeze(0) + i * g
+            h_current = o * torch.tanh(c_current)
+
+            outputs.append(h_current.unsqueeze(1))
+            h_previous = h_current.unsqueeze(0)
+            c_previous = c_current.unsqueeze(0)
+
+        outputs = torch.cat(outputs, dim=1)  # Concatenate along the sequence length dimension
+
+        return outputs, (h_previous, c_previous)
 
 
 class Encoder(nn.Module):
-    '''
-    Bidirectional encoders make use of two RNN layers ; the forward layer applies an RNN
-    to an input sequence from start to end, while the backward layer applies an RNN to a sequence
-    end to start. You must implement a bidirectional LSTM encoder, with dropout on the embedding
-    layer. The two directions of the LSTM network will be concatenated.
-    The PyTorch implementation of the model (nn.LSTM) should be used for this and subsequent
-    questions.
-    '''
     def __init__(
         self,
         vocabulary_size=30522,
@@ -103,7 +108,8 @@ class Encoder(nn.Module):
         self.rnn = nn.LSTM(
             input_size=embedding_size,
             hidden_size=hidden_size,
-            bidirectional=True
+            bidirectional=True,
+            batch_first=True
         )
 
     def forward(self, inputs, hidden_states):
@@ -136,6 +142,7 @@ class Encoder(nn.Module):
         # # ==========================
         x = self.embedding(inputs)
         x = self.dropout(x)
+
         x, hidden_states = self.rnn(x, hidden_states)
         return x, hidden_states
 
@@ -146,7 +153,7 @@ class Encoder(nn.Module):
         # The initial state is a constant here, and is not a learnable parameter
         h_0 = torch.zeros(shape, dtype=torch.float, device=device)
         return (h_0, h_0)
-    
+#%%
 
 class DecoderAttn(nn.Module):
     def __init__(
@@ -197,6 +204,11 @@ class DecoderAttn(nn.Module):
         # # ==========================
         # # TODO: Write your code here
         # # ==========================
+        if self.mlp_attn is not None:
+            inputs = self.mlp_attn(inputs, mask)
+
+        x, hidden_states = self.rnn(inputs, hidden_states)
+        return x, hidden_states
         
         
 class EncoderDecoder(nn.Module):
